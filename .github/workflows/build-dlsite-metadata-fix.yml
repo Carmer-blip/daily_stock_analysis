@@ -1,4 +1,4 @@
-name: Build DLsiteMetadata 1.16.3 Fix
+name: Build DLsiteMetadata 1.16.4 Fix
 
 on:
   push:
@@ -75,7 +75,7 @@ jobs:
             Select-Object -First 1
           if (!$generated) { throw "Playnite Toolbox did not generate a PEXT package." }
 
-          $target = Join-Path $env:GITHUB_WORKSPACE "DLsiteMetadata_1_16_3_Diagnostic.pext"
+          $target = Join-Path $env:GITHUB_WORKSPACE "DLsiteMetadata_1_16_4_Fixed.pext"
           if ($generated.FullName -ne $target) {
             Copy-Item $generated.FullName $target -Force
           }
@@ -94,7 +94,7 @@ jobs:
             $reader = New-Object IO.StreamReader($manifestEntry.Open())
             try { $manifestText = $reader.ReadToEnd() } finally { $reader.Dispose() }
             if ($manifestText -notmatch "(?m)^Version:\s*1\.16\.3\s*$") {
-              throw "Packaged manifest does not declare version 1.16.3."
+              throw "Packaged manifest does not declare version 1.16.4."
             }
             Write-Host "Verified PEXT entries:"
             $names | Sort-Object | ForEach-Object { Write-Host " - $_" }
@@ -109,7 +109,7 @@ jobs:
       - name: Upload installable PEXT
         uses: actions/upload-artifact@v4
         with:
-          name: DLsiteMetadata_1_16_3_Diagnostic
-          path: DLsiteMetadata_1_16_3_Diagnostic.pext
+          name: DLsiteMetadata_1_16_4_Fixed
+          path: DLsiteMetadata_1_16_4_Fixed.pext
           if-no-files-found: error
           retention-days: 14
