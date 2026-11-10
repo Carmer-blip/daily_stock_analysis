@@ -323,7 +323,7 @@ $jsonHelpers = @'
         try
         {
             var firstSegment = new Uri(url).AbsolutePath
-                .Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries)
                 .FirstOrDefault()?.ToLowerInvariant();
 
             if (!string.IsNullOrWhiteSpace(firstSegment) &&
