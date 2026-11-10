@@ -1,12 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 function Replace-Once {
-    param(
-        [string]$Source,
-        [string]$Pattern,
-        [string]$Replacement,
-        [string]$Label
-    )
+    param([string]$Source, [string]$Pattern, [string]$Replacement, [string]$Label)
     $rx = [regex]::new($Pattern, [Text.RegularExpressions.RegexOptions]::Singleline)
     if ($rx.Matches($Source).Count -ne 1) {
         throw "Could not safely locate exactly one source block: $Label"
@@ -16,319 +11,249 @@ function Replace-Once {
 
 $sourcePath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\DLsiteScrapper.cs"
 $providerPath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\DLsiteMetadataProvider.cs"
+$settingsPath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\DLsiteMetadataSettings.cs"
+$viewPath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\DLsiteMetadataSettingsView.xaml"
 $manifestPath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\extension.yaml"
 
+# ---------------------------------------------------------------------------
+# DLsiteScrapper: keep every original parser and selector. Only unify the
+# HTTP handler so the plugin can explicitly use Windows or a manual VPN proxy.
+# ---------------------------------------------------------------------------
 $code = [IO.File]::ReadAllText($sourcePath)
 
-if ($code -notmatch "using System\.IO;") {
-    $code = $code.Replace("using System.Globalization;", "using System.Globalization;" + [Environment]::NewLine + "using System.IO;")
-}
-if ($code -notmatch "using System\.Text;") {
-    $code = $code.Replace("using System.Net.Http;", "using System.Net.Http;" + [Environment]::NewLine + "using System.Text;")
+if ($code -notmatch "using System\.Threading;") {
+    $code = $code.Replace("using System.Text.RegularExpressions;", "using System.Text.RegularExpressions;" + [Environment]::NewLine + "using System.Threading;")
 }
 
-# Replace only the transport layer. The original HTML metadata extraction remains untouched.
-$pagePattern = '(?s)        HttpResponseMessage res;.*?        var responseBody = await res\.Content\.ReadAsStringAsync\(\);\s*'
-$pageReplacement = @'
-        var (responseBody, finalUrl) = await DownloadStringAsync(
-            url,
-            language,
-            BuildWorkPageReferer(url, language),
-            false
-        );
-        result.Links.Add("DLsite", finalUrl); // for redirects
+$oldHandler = 'var handler = new HttpClientHandler { UseCookies = true, CookieContainer = new CookieContainer() };'
+$handlerCount = ([regex]::Matches($code, [regex]::Escape($oldHandler))).Count
+if ($handlerCount -ne 3) { throw "Expected 3 original HttpClientHandler instances, found $handlerCount." }
+$code = $code.Replace($oldHandler, "var handler = CreateHttpClientHandler();")
 
-'@
-$code = Replace-Once $code $pagePattern $pageReplacement "product page request"
+$clientPattern = '(?m)^(\s*)using var client = new HttpClient\(handler\);$'
+$clientMatches = [regex]::Matches($code, $clientPattern)
+if ($clientMatches.Count -ne 3) { throw "Expected 3 HttpClient creation points, found $($clientMatches.Count)." }
+$code = [regex]::Replace($code, $clientPattern, '$1using var client = new HttpClient(handler);' + [Environment]::NewLine + '$1await LogOutboundIpAsync(client);')
 
-# Keep the original search URL and search-result selectors; only route its HTTP request through the same compatible transport.
-$searchRequestPattern = '(?s)        var handler = new HttpClientHandler \{ UseCookies = true, CookieContainer = new CookieContainer\(\) \};\s*var baseUri = new Uri\(SiteBaseUrl\);.*?        var responseBody = await client\.GetStringAsync\(SiteBaseUrl \+ searchUrl\);\s*'
-$searchRequestReplacement = @'
-        var (responseBody, _) = await DownloadStringAsync(
-            SiteBaseUrl + searchUrl,
-            language,
-            SiteBaseUrl,
-            false
-        );
+$helper = @'
+    private static int _outboundIpLogged;
 
-'@
-$code = Replace-Once $code $searchRequestPattern $searchRequestReplacement "search page request"
-
-# Use the product's actual catalogue category for the JSON rating/title endpoint.
-$oldJsonCall = "FetchJsonInfoAsync(productId, language)"
-if (-not $code.Contains($oldJsonCall)) { throw "Could not locate original JSON metadata call." }
-$code = $code.Replace($oldJsonCall, "FetchJsonInfoAsync(productId, language, GetCategoryFromUrl(url))")
-
-# Replace only the JSON enrichment routine. All original HTML field parsing and ParseImages stay as authored upstream.
-$jsonPattern = '(?s)    /// Fetches work_name and rating from DLsite.*?    private static List<string> ParseImages'
-$jsonReplacement = @'
-    /// Fetches work_name and rating from DLsite's category-specific JSON API.
-    /// The upstream HTML scraper remains the source for all other metadata fields.
-    private async Task<(double? Rating, string WorkName)> FetchJsonInfoAsync(
-        string productId,
-        SupportedLanguages language,
-        string category)
+    private HttpClientHandler CreateHttpClientHandler()
     {
-        try
+        var handler = new HttpClientHandler
         {
-            var apiUrl = $"https://www.dlsite.com/{category}/product/info/ajax?product_id={productId}&cdn_cache_min=1";
-            var referer = $"https://www.dlsite.com/{category}/work/=/product_id/{productId}.html?locale={language}";
-            var (json, _) = await DownloadStringAsync(apiUrl, language, referer, true);
+            UseCookies = true,
+            CookieContainer = new CookieContainer(),
+            UseProxy = true
+        };
 
-            var root = JToken.Parse(json);
-            var productNode = FindProductObject(root, productId, true)
-                              ?? FindProductObject(root, productId, false);
+        var proxyMode = settings.ProxyMode ?? "Use Windows system proxy";
 
-            if (productNode == null)
-            {
-                var preview = json.Substring(0, Math.Min(json.Length, 500));
-                logger.Warn($"DLsite JSON response did not contain a product object for {productId}. Root type: {root.Type}. Preview: {preview}");
-                return (null, null);
-            }
-
-            double parsedRating;
-            double? rating = double.TryParse(
-                productNode["rate_average_2dp"]?.ToString(),
-                NumberStyles.Any,
-                CultureInfo.InvariantCulture,
-                out parsedRating)
-                ? parsedRating
-                : (double?)null;
-
-            return (rating, productNode["work_name"]?.ToString());
+        if (proxyMode.Equals("Direct connection", StringComparison.OrdinalIgnoreCase))
+        {
+            handler.UseProxy = false;
+            handler.Proxy = null;
+            logger.Info("DLsite network mode: direct connection. A system-level VPN/TUN can still route this traffic.");
         }
-        catch (Exception ex)
+        else if (proxyMode.Equals("Manual HTTP proxy", StringComparison.OrdinalIgnoreCase))
         {
-            logger.Warn(ex, $"Failed to fetch JSON data for {productId}");
-            return (null, null);
+            var proxyAddress = settings.HttpProxyAddress?.Trim();
+            if (string.IsNullOrWhiteSpace(proxyAddress))
+                throw new InvalidOperationException("Manual HTTP proxy is selected, but the proxy address is empty.");
+
+            if (!proxyAddress.Contains("://"))
+                proxyAddress = "http://" + proxyAddress;
+
+            if (!Uri.TryCreate(proxyAddress, UriKind.Absolute, out var proxyUri) ||
+                (proxyUri.Scheme != Uri.UriSchemeHttp && proxyUri.Scheme != Uri.UriSchemeHttps))
+                throw new InvalidOperationException("Invalid HTTP proxy address. Use a value such as http://127.0.0.1:7890.");
+
+            handler.UseProxy = true;
+            handler.Proxy = new WebProxy(proxyUri);
+            logger.Info($"DLsite network mode: manual HTTP proxy {proxyUri.Host}:{proxyUri.Port}.");
         }
-    }
-
-    private static JObject FindProductObject(JToken token, string productId, bool requireMatchingId)
-    {
-        if (token is JObject obj)
+        else
         {
-            var direct = obj[productId];
-            if (direct is JObject directObject)
-                return directObject;
-            if (direct is JArray directArray)
-            {
-                var directArrayObject = directArray.OfType<JObject>().FirstOrDefault();
-                if (directArrayObject != null)
-                    return directArrayObject;
-            }
-
-            var idToken = obj["product_id"]
-                          ?? obj["productId"]
-                          ?? obj["workno"]
-                          ?? obj["work_no"]
-                          ?? obj["work_id"]
-                          ?? obj["id"];
-
-            if (idToken != null &&
-                string.Equals(idToken.ToString(), productId, StringComparison.OrdinalIgnoreCase))
-                return obj;
-
-            foreach (var property in obj.Properties())
-            {
-                if (string.Equals(property.Name, productId, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (property.Value is JObject propertyObject)
-                        return propertyObject;
-                    if (property.Value is JArray propertyArray)
-                    {
-                        var propertyArrayObject = propertyArray.OfType<JObject>().FirstOrDefault();
-                        if (propertyArrayObject != null)
-                            return propertyArrayObject;
-                    }
-                }
-            }
-
-            foreach (var property in obj.Properties())
-            {
-                var nested = FindProductObject(property.Value, productId, requireMatchingId);
-                if (nested != null)
-                    return nested;
-            }
-
-            if (!requireMatchingId &&
-                (obj["work_name"] != null || obj["rate_average_2dp"] != null))
-                return obj;
-        }
-        else if (token is JArray array)
-        {
-            foreach (var item in array)
-            {
-                var nested = FindProductObject(item, productId, requireMatchingId);
-                if (nested != null)
-                    return nested;
-            }
-        }
-
-        return null;
-    }
-
-    private static string GetCategoryFromUrl(string url)
-    {
-        try
-        {
-            var segments = new Uri(url).AbsolutePath
-                .Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-
-            if (segments.Length > 0)
-            {
-                var category = segments[0].ToLowerInvariant();
-                if (new[] { "home", "soft", "maniax", "pro", "aix", "books", "appx", "app" }.Contains(category))
-                    return category;
-            }
-        }
-        catch
-        {
-            // Keep the original default for unrecognised URLs.
-        }
-
-        return "maniax";
-    }
-
-    private static string BuildWorkPageReferer(string url, SupportedLanguages language)
-    {
-        var category = GetCategoryFromUrl(url);
-        return $"https://www.dlsite.com/{category}/?locale={language}";
-    }
-
-    private async Task<(string Body, string FinalUrl)> DownloadStringAsync(
-        string url,
-        SupportedLanguages language,
-        string referer,
-        bool isAjax)
-    {
-        const int maxAttempts = 3;
-        Exception lastException = null;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            var request = (HttpWebRequest)WebRequest.Create(url);
-            request.Method = "GET";
-            request.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
-            request.Accept = isAjax
-                ? "application/json, text/javascript, */*; q=0.01"
-                : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
-            request.Headers[HttpRequestHeader.AcceptLanguage] =
-                language.ToString().Replace('_', '-') + ",ja;q=0.9,en-US;q=0.8,en;q=0.7";
-            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
-            request.Timeout = 30000;
-            request.ReadWriteTimeout = 30000;
-            request.AllowAutoRedirect = true;
-            request.KeepAlive = true;
-            request.CookieContainer = new CookieContainer();
-
-            var baseUri = new Uri(SiteBaseUrl);
-            request.CookieContainer.Add(baseUri, new Cookie("locale", language.ToString(), "/", ".dlsite.com"));
-            request.CookieContainer.Add(baseUri, new Cookie("loginchecked", "1", "/", ".dlsite.com"));
-            request.CookieContainer.Add(baseUri, new Cookie("adultchecked", "1", "/", ".dlsite.com"));
-
-            if (!string.IsNullOrWhiteSpace(referer))
-                request.Referer = referer;
-
-            if (isAjax)
-                request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            // Explicitly inherit the Windows/.NET default proxy (including a configured
+            // system proxy or PAC result). Browser-only proxy extensions are not visible here.
+            handler.UseProxy = true;
+            handler.Proxy = WebRequest.DefaultWebProxy;
 
             try
             {
-                using (var response = (HttpWebResponse)await request.GetResponseAsync())
-                using (var stream = response.GetResponseStream())
-                {
-                    var encoding = Encoding.UTF8;
-                    try
-                    {
-                        if (!string.IsNullOrWhiteSpace(response.CharacterSet))
-                            encoding = Encoding.GetEncoding(response.CharacterSet.Trim('"'));
-                    }
-                    catch
-                    {
-                        encoding = Encoding.UTF8;
-                    }
-
-                    using (var reader = new StreamReader(stream, encoding, true))
-                    {
-                        var body = await reader.ReadToEndAsync();
-                        return (body, response.ResponseUri?.ToString() ?? url);
-                    }
-                }
+                var target = new Uri(SiteBaseUrl);
+                var selectedProxy = handler.Proxy?.GetProxy(target);
+                if (selectedProxy != null && selectedProxy != target)
+                    logger.Info($"DLsite network mode: Windows system proxy {selectedProxy.Host}:{selectedProxy.Port}.");
+                else
+                    logger.Info("DLsite network mode: Windows system proxy selected; no explicit proxy route was returned. A system-level VPN/TUN may still route traffic.");
             }
-            catch (WebException ex)
+            catch (Exception ex)
             {
-                lastException = ex;
-                var status = (ex.Response as HttpWebResponse)?.StatusCode;
-                (ex.Response as HttpWebResponse)?.Dispose();
-
-                var shouldRetry = !status.HasValue
-                                  || (int)status.Value == 429
-                                  || (int)status.Value >= 500;
-
-                if (attempt >= maxAttempts || !shouldRetry)
-                {
-                    logger.Error(ex, $"Failed to fetch DLsite URL after {attempt} attempt(s): {url}");
-                    throw new HttpRequestException($"Failed to fetch DLsite URL: {url}", ex);
-                }
-
-                logger.Warn(ex, $"DLsite request failed; retrying ({attempt}/{maxAttempts}): {url}");
-                await Task.Delay(TimeSpan.FromMilliseconds(600 * attempt));
+                logger.Warn(ex, "Could not inspect the Windows system proxy; the .NET default proxy setting will still be used.");
             }
         }
 
-        throw new HttpRequestException($"DLsite request failed: {url}", lastException);
+        return handler;
     }
 
-    private static List<string> ParseImages
-'@
-$code = Replace-Once $code $jsonPattern $jsonReplacement "JSON enrichment and request helper"
+    private async Task LogOutboundIpAsync(HttpClient client)
+    {
+        if (Interlocked.CompareExchange(ref _outboundIpLogged, 1, 0) != 0)
+            return;
 
-# Keep the author's original description selector and content; only prevent null descriptions from aborting the entire scrape.
-$descriptionPattern = '(?s)        var descriptionHtml = document\.QuerySelector\("\[itemprop=''description''\]"\)\?\.InnerHtml;\s*var description = descriptionHtml\?\.Replace\("//img\.dlsite\.jp", "https://img\.dlsite\.jp"\);\s*result\.Description = Regex\.Replace\(description\?\.Trim\(\), @"\^\\s\*\$\\n\|\\r", string\.Empty, RegexOptions\.Multiline\);'
-$descriptionReplacement = @'
-        var descriptionHtml = document.QuerySelector("[itemprop='description']")?.InnerHtml;
-        var description = descriptionHtml?.Replace("//img.dlsite.jp", "https://img.dlsite.jp");
-        result.Description = string.IsNullOrWhiteSpace(description)
-            ? null
-            : Regex.Replace(description.Trim(), @"^\s*$\n|\r", string.Empty, RegexOptions.Multiline);
-'@
-$code = Replace-Once $code $descriptionPattern $descriptionReplacement "null-safe original description extraction"
+        Exception lastException = null;
 
+        // These checks use the exact same HttpClientHandler as the subsequent DLsite request.
+        // They are diagnostic only; failure never prevents the original scrape from running.
+        var endpoints = new[]
+        {
+            "https://ipapi.co/json/",
+            "https://api.ipify.org"
+        };
+
+        foreach (var endpoint in endpoints)
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                using var response = await client.GetAsync(endpoint, timeout.Token);
+                response.EnsureSuccessStatusCode();
+
+                var body = await response.Content.ReadAsStringAsync();
+                if (endpoint.Contains("ipapi.co"))
+                {
+                    var info = JObject.Parse(body);
+                    var ip = info["ip"]?.ToString();
+                    var country = info["country_name"]?.ToString() ?? info["country"]?.ToString();
+                    logger.Info($"DLsite plugin outbound public IP (same proxy handler): {ip ?? "unknown"}; country: {country ?? "unknown"}.");
+                }
+                else
+                {
+                    logger.Info($"DLsite plugin outbound public IP (same proxy handler): {body.Trim()}.");
+                }
+
+                return;
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+            }
+        }
+
+        Interlocked.Exchange(ref _outboundIpLogged, 0);
+        if (lastException != null)
+            logger.Warn(lastException, "Could not determine the DLsite plugin outbound public IP. The DLsite request will continue.");
+    }
+
+'@
+
+$anchor = '    private static List<string> ParseImages(IDocument document)'
+if (-not $code.Contains($anchor)) { throw "Could not locate ParseImages insertion point." }
+$code = $code.Replace($anchor, $helper + $anchor)
 [IO.File]::WriteAllText($sourcePath, $code, (New-Object Text.UTF8Encoding($false)))
 
-# Route entered product IDs to their original DLsite catalogue; leave all metadata mapping logic unchanged.
+# Pass the saved plugin settings into the original scraper. No metadata parsing changes.
 $provider = [IO.File]::ReadAllText($providerPath)
-$oldUrl = 'var url = IsValidUrl(link) ? link : $"https://www.dlsite.com/home/work/=/product_id/{gameName}.html";'
-$newUrl = 'var url = IsValidUrl(link) ? link : $"https://www.dlsite.com/{GetSiteFromProductId(gameName)}/work/=/product_id/{gameName}.html";'
-if (-not $provider.Contains($oldUrl)) { throw "Could not find product-ID URL construction." }
-$provider = $provider.Replace($oldUrl, $newUrl)
+$oldConstructor = 'var scrapper = new DLsiteScrapper(Logger);'
+if (-not $provider.Contains($oldConstructor)) { throw "Could not locate original scraper constructor call." }
+$provider = $provider.Replace($oldConstructor, 'var scrapper = new DLsiteScrapper(Logger, settings);')
+[IO.File]::WriteAllText($providerPath, $provider, (New-Object Text.UTF8Encoding($false)))
 
-$provider = $provider.Replace(
-    '(home|soft|maniax|pro|aix)',
-    '(home|soft|maniax|pro|aix|books|appx|app)'
-)
+# ---------------------------------------------------------------------------
+# Settings: default to Windows system proxy; offer an optional manual HTTP
+# proxy address for VPN clients that only expose a local proxy port.
+# ---------------------------------------------------------------------------
+$settings = [IO.File]::ReadAllText($settingsPath)
 
-$siteMethod = @'
-    private static string GetSiteFromProductId(string productId)
+$settings = Replace-Once $settings '(?m)    private string _supportedLanguagesMappingTarget = "None";' @'
+    private string _supportedLanguagesMappingTarget = "None";
+    private string _proxyMode = "Use Windows system proxy";
+    private string _httpProxyAddress = "";
+'@ "proxy settings fields"
+
+$settingsAnchor = '    public string SearchCategory'
+$settingsProps = @'
+    [DontSerialize]
+    public List<string> AvailableProxyModes { get; } =
+    [
+        "Use Windows system proxy",
+        "Manual HTTP proxy",
+        "Direct connection"
+    ];
+
+    public string ProxyMode
     {
-        if (productId?.StartsWith("VJ", StringComparison.OrdinalIgnoreCase) == true)
-            return "pro";
+        get => _proxyMode;
+        set => SetValue(ref _proxyMode, value);
+    }
 
-        if (productId?.StartsWith("BJ", StringComparison.OrdinalIgnoreCase) == true)
-            return "books";
-
-        return "maniax";
+    public string HttpProxyAddress
+    {
+        get => _httpProxyAddress;
+        set => SetValue(ref _httpProxyAddress, value);
     }
 
 '@
-$providerAnchor = '    private static bool IsValidId(string id)'
-if (-not $provider.Contains($providerAnchor)) { throw "Could not find provider validation methods." }
-$provider = $provider.Replace($providerAnchor, $siteMethod + $providerAnchor)
+if (-not $settings.Contains($settingsAnchor)) { throw "Could not locate settings property insertion point." }
+$settings = $settings.Replace($settingsAnchor, $settingsProps + $settingsAnchor)
 
-# Preserve the original extension and only bump the package version.
+$verifyAnchor = '        return true;'
+$verifyAddition = @'
+        if (!Settings.AvailableProxyModes.Contains(Settings.ProxyMode))
+            errors.Add("Selected network proxy mode is not supported.");
+
+        if (Settings.ProxyMode == "Manual HTTP proxy")
+        {
+            var proxyAddress = Settings.HttpProxyAddress?.Trim();
+            if (!string.IsNullOrWhiteSpace(proxyAddress) && !proxyAddress.Contains("://"))
+                proxyAddress = "http://" + proxyAddress;
+
+            if (string.IsNullOrWhiteSpace(proxyAddress) ||
+                !System.Uri.TryCreate(proxyAddress, System.UriKind.Absolute, out var proxyUri) ||
+                (proxyUri.Scheme != System.Uri.UriSchemeHttp && proxyUri.Scheme != System.Uri.UriSchemeHttps))
+                errors.Add("Enter a valid HTTP proxy address, for example http://127.0.0.1:7890.");
+        }
+
+'@
+if (([regex]::Matches($settings, [regex]::Escape($verifyAnchor))).Count -ne 1) { throw "Could not safely locate settings validation return." }
+$settings = $settings.Replace($verifyAnchor, $verifyAddition + $verifyAnchor)
+[IO.File]::WriteAllText($settingsPath, $settings, (New-Object Text.UTF8Encoding($false)))
+
+# Add compact controls to the original settings view.
+$view = [IO.File]::ReadAllText($viewPath)
+$pageLanguageBlock = @'
+        <StackPanel Orientation="Horizontal" Margin="0, 0, 0, 10">
+            <TextBlock Text="Page Language:" Margin="0, 0, 5, 0" />
+            <ComboBox ItemsSource="{Binding Settings.AvailableLanguages}"
+                      SelectedValue="{Binding Settings.PageLanguage}" />
+        </StackPanel>
+'@
+$proxyUi = @'
+        <StackPanel Orientation="Horizontal" Margin="0, 0, 0, 10">
+            <TextBlock Text="Network proxy:" Margin="0, 0, 5, 0" />
+            <ComboBox Width="220"
+                      ItemsSource="{Binding Settings.AvailableProxyModes}"
+                      SelectedValue="{Binding Settings.ProxyMode}" />
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Margin="0, 0, 0, 3">
+            <TextBlock Text="HTTP proxy address:" Margin="0, 0, 5, 0" />
+            <TextBox Width="220"
+                     Text="{Binding Settings.HttpProxyAddress, UpdateSourceTrigger=PropertyChanged}" />
+        </StackPanel>
+        <TextBlock Text="Manual mode example: http://127.0.0.1:7890 (HTTP proxy port, not SOCKS5)."
+                   Margin="0, 0, 0, 10"
+                   TextWrapping="Wrap"
+                   Foreground="Gray" />
+'@
+if (([regex]::Matches($view, [regex]::Escape($pageLanguageBlock))).Count -ne 1) { throw "Could not locate original Page Language UI block." }
+$view = $view.Replace($pageLanguageBlock, $pageLanguageBlock + $proxyUi)
+[IO.File]::WriteAllText($viewPath, $view, (New-Object Text.UTF8Encoding($false)))
+
+# New version only; the upstream metadata fields and extraction code remain unchanged.
 $manifest = [IO.File]::ReadAllText($manifestPath)
-$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.5'
+$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.2'
 [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
 
-Write-Host "Patched DLsite transport, category-aware JSON enrichment, and null-safe description handling. Original metadata selectors and field mappings were preserved."
+Write-Host "Applied proxy routing and outbound-IP diagnostics to the original DLsiteMetadata source. Original metadata extraction was not modified."
