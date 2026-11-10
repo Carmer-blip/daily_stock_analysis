@@ -30,10 +30,10 @@ if ($code -notmatch "using System\.Text;") {
 # Use browser-like requests for DLsite pages and retain the final URL after redirects.
 $pagePattern = '(?s)        HttpResponseMessage res;\s*try\s*\{.*?        var responseBody = await res\.Content\.ReadAsStringAsync\(\);\s*'
 $pageReplacement = @'
-        var (responseBody, finalUrl) = await DownloadStringAsync(
+        var (responseBody, finalUrl) = await DLsiteHttp.DLsiteHttp.DownloadStringAsync(
             url,
             language,
-            BuildWorkPageReferer(url, language),
+            DLsiteHttp.BuildWorkPageReferer(url, language),
             false
         );
         result.Links.Add("DLsite", finalUrl); // for redirects
@@ -47,7 +47,7 @@ $code = Replace-Once $code '        query = query\.Replace\(" ", "\+"\);' '     
 $searchRequestPattern = '(?s)        var handler = new HttpClientHandler \{ UseCookies = true, CookieContainer = new CookieContainer\(\) \};\s*var baseUri = new Uri\(SiteBaseUrl\);.*?        var responseBody = await client\.GetStringAsync\(SiteBaseUrl \+ searchUrl\);\s*'
 $searchRequestReplacement = @'
         var searchPageUrl = SiteBaseUrl + searchUrl;
-        var (responseBody, finalSearchUrl) = await DownloadStringAsync(
+        var (responseBody, finalSearchUrl) = await DLsiteHttp.DLsiteHttp.DownloadStringAsync(
             searchPageUrl,
             language,
             SiteBaseUrl,
@@ -59,7 +59,7 @@ $code = Replace-Once $code $searchRequestPattern $searchRequestReplacement "sear
 
 $oldJsonCall = "FetchJsonInfoAsync(productId, language)"
 if (-not $code.Contains($oldJsonCall)) { throw "Could not locate JSON metadata call." }
-$code = $code.Replace($oldJsonCall, "FetchJsonInfoAsync(productId, language, GetCategoryFromUrl(finalUrl))")
+$code = $code.Replace($oldJsonCall, "FetchJsonInfoAsync(productId, language, DLsiteHttp.GetCategoryFromUrl(finalUrl))")
 
 $jsonPattern = '(?s)    /// Fetches work_name and rating from DLsite.*?    private static List<string> ParseImages'
 $jsonReplacement = @'
@@ -74,7 +74,7 @@ $jsonReplacement = @'
         {
             var apiUrl = $"https://www.dlsite.com/{category}/product/info/ajax?product_id={productId}&cdn_cache_min=1";
             var referer = $"https://www.dlsite.com/{category}/work/=/product_id/{productId}.html/?locale={language}";
-            var (json, _) = await DownloadStringAsync(apiUrl, language, referer, true);
+            var (json, _) = await DLsiteHttp.DLsiteHttp.DownloadStringAsync(apiUrl, language, referer, true);
 
             var root = JToken.Parse(json);
             JToken productNode = null;
@@ -337,10 +337,10 @@ $code = Replace-Once $code $searchParserPattern $searchParserReplacement "search
 # Extract DLsite's current structured description blocks (work_parts), with legacy/SEO fallbacks.
 $descriptionPattern = '(?s)        var descriptionHtml = document\.QuerySelector\("\[itemprop=''description''\]"\)\?\.InnerHtml;.*?        result\.Description = Regex\.Replace\(description\?\.Trim\(\), @"\^\\s\*\$\\n\|\\r", string\.Empty, RegexOptions\.Multiline\);'
 $descriptionReplacement = @'
-        var descriptionParts = document.QuerySelectorAll("div.work_parts");
+        var descriptionParts = document.QuerySelectorAll("div.work_parts").ToList();
         string description = null;
 
-        if (descriptionParts.Length > 0)
+        if (descriptionParts.Count > 0)
         {
             description = string.Join(
                 Environment.NewLine,
@@ -456,6 +456,87 @@ $code = $code.Replace(
     'Chrome/138.0.0.0 Safari/537.36',
     'Chrome/138.0.0.0 Safari/537.36'
 )
+
+
+
+# Add the request helper as a separate type so it is never nested inside a scraper method.
+$httpHelper = @'
+internal static class DLsiteHttp
+{
+    public static string GetCategoryFromUrl(string url)
+    {
+        try
+        {
+            var segments = new Uri(url).AbsolutePath.Split(
+                new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length > 0)
+            {
+                var category = segments[0].ToLowerInvariant();
+                if (new[] { "home", "soft", "maniax", "pro", "aix", "books", "appx", "app" }.Contains(category))
+                    return category;
+            }
+        }
+        catch { }
+        return "maniax";
+    }
+
+    public static string BuildWorkPageReferer(string url, SupportedLanguages language)
+    {
+        var category = GetCategoryFromUrl(url);
+        return $"https://www.dlsite.com/{category}/?locale={language}";
+    }
+
+    public static async Task<(string Body, string FinalUrl)> DownloadStringAsync(
+        string url, SupportedLanguages language, string referer, bool isAjax)
+    {
+        Exception lastException = null;
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var request = (HttpWebRequest)WebRequest.Create(url);
+            request.Method = "GET";
+            request.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+            request.Accept = isAjax
+                ? "application/json, text/javascript, */*; q=0.01"
+                : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+            request.Headers[HttpRequestHeader.AcceptLanguage] = language.ToString().Replace('_', '-') + ",ja;q=0.9,en-US;q=0.8,en;q=0.7";
+            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            request.Timeout = 30000;
+            request.ReadWriteTimeout = 30000;
+            request.AllowAutoRedirect = true;
+            request.CookieContainer = new CookieContainer();
+            var baseUri = new Uri("https://www.dlsite.com/");
+            request.CookieContainer.Add(baseUri, new Cookie("locale", language.ToString(), "/", ".dlsite.com"));
+            request.CookieContainer.Add(baseUri, new Cookie("loginchecked", "1", "/", ".dlsite.com"));
+            request.CookieContainer.Add(baseUri, new Cookie("adultchecked", "1", "/", ".dlsite.com"));
+            if (!string.IsNullOrWhiteSpace(referer)) request.Referer = referer;
+            if (isAjax) request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+
+            try
+            {
+                using (var response = (HttpWebResponse)await request.GetResponseAsync())
+                using (var stream = response.GetResponseStream())
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    var body = await reader.ReadToEndAsync();
+                    return (body, response.ResponseUri?.ToString() ?? url);
+                }
+            }
+            catch (WebException ex)
+            {
+                lastException = ex;
+                var status = (ex.Response as HttpWebResponse)?.StatusCode;
+                (ex.Response as HttpWebResponse)?.Dispose();
+                var retry = !status.HasValue || (int)status.Value == 429 || (int)status.Value >= 500;
+                if (!retry || attempt == 3)
+                    throw new HttpRequestException($"Failed to fetch DLsite URL: {url}", ex);
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt));
+            }
+        }
+        throw new HttpRequestException($"DLsite request failed: {url}", lastException);
+    }
+}
+'@
+$code += [Environment]::NewLine + $httpHelper + [Environment]::NewLine
 
 [IO.File]::WriteAllText($sourcePath, $code, (New-Object Text.UTF8Encoding($false)))
 
