@@ -398,7 +398,7 @@ $mainImagesReplacement = @'
 $code = Replace-Once $code $mainImagesPattern $mainImagesReplacement "main and background images"
 
 # The current page and AJAX API need the actual category, and the product slider may not be a child of #work_left.
-$parseImagesPattern = '(?s)    private static List<string> ParseImages\(IDocument document\)\s*\{.*?\n    \}\n\}'
+$parseImagesPattern = '(?s)    private static List<string> ParseImages\(IDocument document\).*?\n\}'
 $parseImagesReplacement = @'
     private static List<string> ParseImages(IDocument document)
     {
