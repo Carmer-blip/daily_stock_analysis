@@ -247,6 +247,21 @@ if ($jsonRx.Matches($code).Count -ne 1) { throw "Could not safely locate JSON pa
 $jsonReplacementForRegex = $jsonReplacement.Replace('$', '$$')
 $code = $jsonRx.Replace($code, $jsonReplacementForRegex, 1)
 
+$descriptionLine = '        result.Description = Regex.Replace(description?.Trim(), @"^\s*$\n|\r", string.Empty, RegexOptions.Multiline);'
+$descriptionReplacement = @'
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            logger.Warn($"DLsite description element was missing or empty for {productId ?? url} ({res.RequestMessage.RequestUri}).");
+            result.Description = null;
+        }
+        else
+        {
+            result.Description = Regex.Replace(description.Trim(), @"^\s*$\n|\r", string.Empty, RegexOptions.Multiline);
+        }
+'@
+if (-not $code.Contains($descriptionLine)) { throw "Could not locate nullable description assignment." }
+$code = $code.Replace($descriptionLine, $descriptionReplacement)
+
 [IO.File]::WriteAllText($path, $code, (New-Object Text.UTF8Encoding($false)))
 
 $manifest = [IO.File]::ReadAllText($manifestPath)
