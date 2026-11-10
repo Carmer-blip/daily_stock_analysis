@@ -42,7 +42,7 @@ $code = $searchRx.Replace($code, $searchReplacement, 1)
 
 $oldCall = "FetchJsonInfoAsync(productId, language)"
 if (-not $code.Contains($oldCall)) { throw "Could not locate JSON metadata call." }
-$code = $code.Replace($oldCall, "FetchJsonInfoAsync(productId, language, GetCategoryFromUrl(url))")
+$code = $code.Replace($oldCall, "FetchJsonInfoAsync(productId, language, GetCategoryFromUrl(finalUrl))")
 
 $jsonPattern = '(?s)    /// Fetches work_name and rating from DLsite.*?    private static List<string> ParseImages'
 $jsonReplacement = @'
