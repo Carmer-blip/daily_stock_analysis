@@ -30,7 +30,7 @@ if ($code -notmatch "using System\.Text;") {
 # Use browser-like requests for DLsite pages and retain the final URL after redirects.
 $pagePattern = '(?s)        HttpResponseMessage res;\s*try\s*\{.*?        var responseBody = await res\.Content\.ReadAsStringAsync\(\);\s*'
 $pageReplacement = @'
-        var (responseBody, finalUrl) = await DLsiteHttp.DLsiteHttp.DownloadStringAsync(
+        var (responseBody, finalUrl) = await DLsiteHttp.DownloadStringAsync(
             url,
             language,
             DLsiteHttp.BuildWorkPageReferer(url, language),
@@ -47,7 +47,7 @@ $code = Replace-Once $code '        query = query\.Replace\(" ", "\+"\);' '     
 $searchRequestPattern = '(?s)        var handler = new HttpClientHandler \{ UseCookies = true, CookieContainer = new CookieContainer\(\) \};\s*var baseUri = new Uri\(SiteBaseUrl\);.*?        var responseBody = await client\.GetStringAsync\(SiteBaseUrl \+ searchUrl\);\s*'
 $searchRequestReplacement = @'
         var searchPageUrl = SiteBaseUrl + searchUrl;
-        var (responseBody, finalSearchUrl) = await DLsiteHttp.DLsiteHttp.DownloadStringAsync(
+        var (responseBody, finalSearchUrl) = await DLsiteHttp.DownloadStringAsync(
             searchPageUrl,
             language,
             SiteBaseUrl,
@@ -74,7 +74,7 @@ $jsonReplacement = @'
         {
             var apiUrl = $"https://www.dlsite.com/{category}/product/info/ajax?product_id={productId}&cdn_cache_min=1";
             var referer = $"https://www.dlsite.com/{category}/work/=/product_id/{productId}.html/?locale={language}";
-            var (json, _) = await DLsiteHttp.DLsiteHttp.DownloadStringAsync(apiUrl, language, referer, true);
+            var (json, _) = await DLsiteHttp.DownloadStringAsync(apiUrl, language, referer, true);
 
             var root = JToken.Parse(json);
             JToken productNode = null;
