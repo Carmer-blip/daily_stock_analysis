@@ -30,10 +30,10 @@ $handlerCount = ([regex]::Matches($code, [regex]::Escape($oldHandler))).Count
 if ($handlerCount -ne 3) { throw "Expected 3 original HttpClientHandler instances, found $handlerCount." }
 $code = $code.Replace($oldHandler, "var handler = CreateHttpClientHandler();")
 
-$clientPattern = '(?m)^(\s*)using var client = new HttpClient\(handler\);$'
-$clientMatches = [regex]::Matches($code, $clientPattern)
-if ($clientMatches.Count -ne 3) { throw "Expected 3 HttpClient creation points, found $($clientMatches.Count)." }
-$code = [regex]::Replace($code, $clientPattern, '$1using var client = new HttpClient(handler);' + [Environment]::NewLine + '$1await LogOutboundIpAsync(client);')
+$clientLine = 'using var client = new HttpClient(handler);'
+$clientCount = ([regex]::Matches($code, [regex]::Escape($clientLine))).Count
+if ($clientCount -ne 3) { throw "Expected 3 HttpClient creation points, found $clientCount." }
+$code = $code.Replace($clientLine, $clientLine + [Environment]::NewLine + '            await LogOutboundIpAsync(client);')
 
 $helper = @'
     private static int _outboundIpLogged;
