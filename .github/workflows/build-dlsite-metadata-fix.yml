@@ -41,16 +41,67 @@ jobs:
         shell: pwsh
         run: msbuild upstream/source/DLsiteMetadata.sln /m /p:Configuration=Release /p:Platform="Any CPU"
 
-      - name: Package Playnite extension
+      - name: Package with official Playnite Toolbox
         shell: pwsh
         run: |
-          $out = "upstream/source/bin/Release"
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $env:GITHUB_WORKSPACE "upstream/source/bin/Release"
           if (!(Test-Path "$out/DLsiteMetadata.dll")) { throw "Build output missing DLsiteMetadata.dll" }
           if (!(Test-Path "$out/extension.yaml")) { throw "Build output missing extension.yaml" }
-          $pext = "DLsiteMetadata_1_16_2_Fix.pext"
-          if (Test-Path $pext) { Remove-Item $pext -Force }
-          Compress-Archive -Path "$out/*" -DestinationPath $pext -CompressionLevel Optimal
-          Get-Item $pext | Format-List Name,Length
+          if (!(Test-Path "$out/Resources/DLsiteLogo.png")) { throw "Build output missing extension icon." }
+
+          $sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+          if (!$sevenZip) {
+            $candidate = "C:\Program Files\7-Zip\7z.exe"
+            if (Test-Path $candidate) { $sevenZip = $candidate }
+          }
+          if (!$sevenZip) { throw "7-Zip was not found on the Windows runner." }
+
+          $playniteArchive = Join-Path $env:RUNNER_TEMP "Playnite-10.64.7z"
+          $toolboxDir = Join-Path $env:RUNNER_TEMP "Playnite-10.64"
+          Invoke-WebRequest -Uri "https://github.com/JosefNemec/Playnite/releases/download/10.64/10.64.7z" -OutFile $playniteArchive
+          New-Item -ItemType Directory -Force -Path $toolboxDir | Out-Null
+          & $sevenZip x $playniteArchive "-o$toolboxDir" -y | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "Failed to extract official Playnite distribution." }
+
+          $toolbox = Join-Path $toolboxDir "Toolbox.exe"
+          if (!(Test-Path $toolbox)) { throw "Toolbox.exe was not found in Playnite 10.64 distribution." }
+
+          & $toolbox pack $out $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { throw "Playnite Toolbox failed to package the extension." }
+
+          $generated = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter "*.pext" |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+          if (!$generated) { throw "Playnite Toolbox did not generate a PEXT package." }
+
+          $target = Join-Path $env:GITHUB_WORKSPACE "DLsiteMetadata_1_16_2_Fix.pext"
+          if ($generated.FullName -ne $target) {
+            Copy-Item $generated.FullName $target -Force
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead($target)
+          try {
+            $names = @($archive.Entries | ForEach-Object { $_.FullName })
+            foreach ($required in @("extension.yaml", "DLsiteMetadata.dll", "Resources/DLsiteLogo.png")) {
+              if ($names -notcontains $required) { throw "Packaged PEXT is missing required root entry: $required" }
+            }
+            $manifestEntry = $archive.GetEntry("extension.yaml")
+            $reader = New-Object IO.StreamReader($manifestEntry.Open())
+            try { $manifestText = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            if ($manifestText -notmatch "(?m)^Version:\s*1\.16\.2\s*$") {
+              throw "Packaged manifest does not declare version 1.16.2."
+            }
+            Write-Host "Verified PEXT entries:"
+            $names | Sort-Object | ForEach-Object { Write-Host " - $_" }
+          }
+          finally {
+            $archive.Dispose()
+          }
+
+          Get-FileHash $target -Algorithm SHA256 | Format-List
+          Get-Item $target | Format-List Name,Length
 
       - name: Upload installable PEXT
         uses: actions/upload-artifact@v4
