@@ -447,7 +447,7 @@ $provider = $provider.Replace($providerHelperAnchor, $providerHelper + $provider
 $manifest = [IO.File]::ReadAllText($manifestPath)
 $manifest = $manifest -replace '(?m)^Version:.*
 $manifest = [IO.File]::ReadAllText($manifestPath)
-$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.2'
+$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.3'
 [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
 
 Write-Host "Applied proxy routing and outbound-IP diagnostics to the original DLsiteMetadata source. Original metadata extraction was not modified."
