@@ -259,7 +259,7 @@ $jsonReplacement = @'
 
     private static List<string> ParseImages
 '@
-$searchParserPattern = '(?s)        var searchResultsTable = document\.QuerySelector\("\.work_1col_table\.n_worklist"\);.*?\n        return searchResults;\n    \}'
+$searchParserPattern = '(?s)        var searchResultsTable = document\.QuerySelector\("\.work_1col_table\.n_worklist"\);.*?return searchResults;\s*\}'
 $searchParserReplacement = @'
         var searchResultsRows = document.QuerySelectorAll(
             ".work_1col_table.n_worklist tr, #search_result_list tr, .n_work_list_container tr, tr[data-list_item_product_id]"
