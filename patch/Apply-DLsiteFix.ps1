@@ -251,7 +251,7 @@ $descriptionLine = '        result.Description = Regex.Replace(description?.Trim
 $descriptionReplacement = @'
         if (string.IsNullOrWhiteSpace(description))
         {
-            logger.Warn($"DLsite description element was missing or empty for {productId ?? url} ({res.RequestMessage.RequestUri}).");
+            logger.Warn($"DLsite description element was missing or empty for {productId ?? url} ({finalUrl}).");
             result.Description = null;
         }
         else
