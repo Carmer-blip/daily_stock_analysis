@@ -260,7 +260,7 @@ $providerPath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\DLsiteMetadataP
 $provider = [IO.File]::ReadAllText($providerPath)
 $needle = '        catch (AggregateException ae)' + [Environment]::NewLine + '        {'
 $replacement = '        catch (AggregateException ae)' + [Environment]::NewLine + '        {' + [Environment]::NewLine +
-'            Logger.Error(ae, $"DLsite metadata fetch failed. GameName=''{' + '$gameName' + '}''; DLsiteLink=''{' + '$dlsiteLink' + '}'';");'
+'            Logger.Error(ae, "DLsite metadata fetch failed. GameName=''" + gameName + "''; DLsiteLink=''" + dlsiteLink + "''.");'
 if (!$provider.Contains($needle)) { throw "Could not find AggregateException handler in DLsiteMetadataProvider.cs." }
 $provider = $provider.Replace($needle, $replacement)
 [IO.File]::WriteAllText($providerPath, $provider, (New-Object Text.UTF8Encoding($false)))
