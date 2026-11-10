@@ -84,7 +84,7 @@ jobs:
           $archive = [IO.Compression.ZipFile]::OpenRead($target)
           try {
             $names = @($archive.Entries | ForEach-Object { $_.FullName })
-            $normalisedNames = @($names | ForEach-Object { $_.Replace("\\", "/") })
+            $normalisedNames = @($names | ForEach-Object { $_.Replace('\', '/') })
             Write-Host "PEXT archive entries:"
             $names | ForEach-Object { Write-Host " - $_" }
             foreach ($required in @("extension.yaml", "DLsiteMetadata.dll", "Resources/DLsiteLogo.png")) {
