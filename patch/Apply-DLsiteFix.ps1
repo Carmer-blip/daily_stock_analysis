@@ -253,6 +253,209 @@ if (([regex]::Matches($view, [regex]::Escape($pageLanguageBlock))).Count -ne 1) 
 $view = $view.Replace($pageLanguageBlock, $pageLanguageBlock + $proxyUi)
 [IO.File]::WriteAllText($viewPath, $view, (New-Object Text.UTF8Encoding($false)))
 
+
+# ---------------------------------------------------------------------------
+# Compatibility fixes discovered in the user's Playnite extensions.log:
+# - DLsite product-info JSON may be an object OR an array.
+# - Optional rating fields can be null.
+# - Product-info AJAX endpoint must match the product's category.
+# - Accept /books/ links and preserve their product IDs.
+# - Do not throw when a product page has no description node.
+# ---------------------------------------------------------------------------
+$code = [IO.File]::ReadAllText($sourcePath)
+
+$code = Replace-Once $code 'var \(jsonRating, jsonTitle\) = await FetchJsonInfoAsync\(productId, language\);' @'
+            var apiCategory = GetApiCategory(url, productId);
+            var (jsonRating, jsonTitle) = await FetchJsonInfoAsync(productId, language, apiCategory);
+'@ "category-aware product info request"
+
+$code = Replace-Once $code 'private async Task<\(double\? Rating, string WorkName\)> FetchJsonInfoAsync\(string productId,\s*SupportedLanguages language\)' 'private async Task<(double? Rating, string WorkName)> FetchJsonInfoAsync(string productId, SupportedLanguages language, string category)' "JSON method signature"
+
+$code = Replace-Once $code '\$"https://www\.dlsite\.com/maniax/product/info/ajax\?product_id=\{productId\}&cdn_cache_min=1"' '$"https://www.dlsite.com/{category}/product/info/ajax?product_id={productId}&cdn_cache_min=1"' "category-specific JSON endpoint"
+
+$code = Replace-Once $code 'new Uri\(\$"https://www\.dlsite\.com/maniax/work/=/product_id/\{productId\}\.html\?locale=\{language\}"\)' 'new Uri($"https://www.dlsite.com/{category}/work/=/product_id/{productId}.html?locale={language}")' "category-specific JSON referrer"
+
+$oldJsonParse = @'
+            var json = await response.Content.ReadAsStringAsync();
+            var productNode = JObject.Parse(json)[productId];
+
+            return (
+                productNode?["rate_average_2dp"]?.Value<float>(),
+                productNode?["work_name"]?.Value<string>()
+            );
+'@
+$newJsonParse = @'
+            var json = await response.Content.ReadAsStringAsync();
+            var root = JToken.Parse(json);
+            var productNode = FindProductObject(root, productId);
+
+            if (productNode == null)
+            {
+                logger.Warn($"DLsite JSON response did not contain a product object for {productId}.");
+                return (null, null);
+            }
+
+            double? rating = null;
+            var ratingToken = productNode["rate_average_2dp"];
+            if (ratingToken != null &&
+                ratingToken.Type != JTokenType.Null &&
+                double.TryParse(ratingToken.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedRating))
+            {
+                rating = parsedRating;
+            }
+
+            var titleToken = productNode["work_name"];
+            var title = titleToken == null || titleToken.Type == JTokenType.Null
+                ? null
+                : titleToken.ToString();
+
+            return (rating, title);
+'@
+if (([regex]::Matches($code, [regex]::Escape($oldJsonParse))).Count -ne 1) {
+    throw "Could not safely locate original JSON parsing block."
+}
+$code = $code.Replace($oldJsonParse, $newJsonParse)
+
+$helperAnchor = '    private static List<string> ParseImages(IDocument document)'
+$jsonHelpers = @'
+    private static string GetApiCategory(string url, string productId)
+    {
+        try
+        {
+            var firstSegment = new Uri(url).AbsolutePath
+                .Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault()?.ToLowerInvariant();
+
+            if (!string.IsNullOrWhiteSpace(firstSegment) &&
+                firstSegment != "home" &&
+                new[] { "maniax", "pro", "soft", "books", "appx", "aix", "comipo" }.Contains(firstSegment))
+                return firstSegment;
+        }
+        catch
+        {
+            // Fall back to the product ID prefix below.
+        }
+
+        if (productId.StartsWith("VJ", StringComparison.OrdinalIgnoreCase)) return "pro";
+        if (productId.StartsWith("BJ", StringComparison.OrdinalIgnoreCase)) return "books";
+        if (productId.StartsWith("RJ", StringComparison.OrdinalIgnoreCase) ||
+            productId.StartsWith("RE", StringComparison.OrdinalIgnoreCase)) return "maniax";
+        return "home";
+    }
+
+    private static JObject FindProductObject(JToken token, string productId)
+    {
+        if (token is JObject obj)
+        {
+            if (obj[productId] is JObject keyedProduct)
+                return keyedProduct;
+
+            var id = obj["product_id"]?.ToString()
+                     ?? obj["workno"]?.ToString()
+                     ?? obj["work_no"]?.ToString();
+
+            if (string.Equals(id, productId, StringComparison.OrdinalIgnoreCase))
+                return obj;
+
+            if (obj["work_name"] != null || obj["rate_average_2dp"] != null)
+                return obj;
+
+            foreach (var property in obj.Properties())
+            {
+                var found = FindProductObject(property.Value, productId);
+                if (found != null) return found;
+            }
+        }
+        else if (token is JArray array)
+        {
+            foreach (var item in array)
+            {
+                var found = FindProductObject(item, productId);
+                if (found != null) return found;
+            }
+
+            if (array.Count == 1 && array[0] is JObject onlyProduct)
+                return onlyProduct;
+        }
+
+        return null;
+    }
+
+'@
+if (-not $code.Contains($helperAnchor)) { throw "Could not locate ParseImages helper insertion point." }
+$code = $code.Replace($helperAnchor, $jsonHelpers + $helperAnchor)
+
+$oldDescription = @'
+        var descriptionHtml = document.QuerySelector("[itemprop='description']")?.InnerHtml;
+        var description = descriptionHtml?.Replace("//img.dlsite.jp", "https://img.dlsite.jp");
+        result.Description = Regex.Replace(description?.Trim(), @"^\s*$\n|\r", string.Empty, RegexOptions.Multiline);
+'@
+$newDescription = @'
+        var descriptionElement = document.QuerySelector("[itemprop='description']")
+                                 ?? document.QuerySelector("#work_right .work_parts_area")
+                                 ?? document.QuerySelector(".work_parts_area");
+        var descriptionHtml = descriptionElement?.InnerHtml;
+        var description = descriptionHtml?.Replace("//img.dlsite.jp", "https://img.dlsite.jp");
+
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            description = document.QuerySelector("meta[property='og:description']")?.GetAttribute("content")
+                          ?? document.QuerySelector("meta[name='description']")?.GetAttribute("content");
+        }
+
+        result.Description = string.IsNullOrWhiteSpace(description)
+            ? null
+            : Regex.Replace(description.Trim(), @"^\s*$\n|\r", string.Empty, RegexOptions.Multiline);
+'@
+if (([regex]::Matches($code, [regex]::Escape($oldDescription))).Count -ne 1) {
+    throw "Could not safely locate original description parsing block."
+}
+$code = $code.Replace($oldDescription, $newDescription)
+[IO.File]::WriteAllText($sourcePath, $code, (New-Object Text.UTF8Encoding($false)))
+
+# Fix provider URL recognition and route product IDs to the correct category.
+$provider = [IO.File]::ReadAllText($providerPath)
+$provider = Replace-Once $provider 'var url = IsValidUrl\(link\) \? link : \$"https://www\.dlsite\.com/home/work/=/product_id/\{gameName\}\.html";' @'
+            var url = IsValidUrl(link)
+                ? link
+                : IsValidId(link)
+                    ? $"https://www.dlsite.com/{GetCategoryForProductId(link)}/work/=/product_id/{link}.html"
+                    : IsValidId(gameName)
+                        ? $"https://www.dlsite.com/{GetCategoryForProductId(gameName)}/work/=/product_id/{gameName}.html"
+                        : $"https://www.dlsite.com/home/work/=/product_id/{gameName}.html";
+'@ "preserve product ID and route"
+
+$provider = Replace-Once $provider '\(home\|soft\|maniax\|pro\|aix\)' '(home|soft|maniax|pro|aix|books|appx|comipo)' "accept books and additional DLsite categories"
+
+$providerHelperAnchor = '    private static bool IsValidId(string id)'
+$providerHelper = @'
+    private static string GetCategoryForProductId(string productId)
+    {
+        if (productId.StartsWith("VJ", StringComparison.OrdinalIgnoreCase)) return "pro";
+        if (productId.StartsWith("BJ", StringComparison.OrdinalIgnoreCase)) return "books";
+        if (productId.StartsWith("RJ", StringComparison.OrdinalIgnoreCase) ||
+            productId.StartsWith("RE", StringComparison.OrdinalIgnoreCase)) return "maniax";
+        return "home";
+    }
+
+'@
+if (-not $provider.Contains($providerHelperAnchor)) { throw "Could not locate provider ID helper insertion point." }
+$provider = $provider.Replace($providerHelperAnchor, $providerHelper + $providerHelperAnchor)
+[IO.File]::WriteAllText($providerPath, $provider, (New-Object Text.UTF8Encoding($false)))
+
+# Version bump for this follow-up build.
+$manifest = [IO.File]::ReadAllText($manifestPath)
+$manifest = $manifest -replace '(?m)^Version:.*
+$manifest = [IO.File]::ReadAllText($manifestPath)
+$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.2'
+[IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
+
+Write-Host "Applied proxy routing and outbound-IP diagnostics to the original DLsiteMetadata source. Original metadata extraction was not modified."
+, 'Version: 1.16.3'
+[IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
+
+Write-Host "Applied category-aware URLs, array/null-safe JSON parsing, and null-safe descriptions."
+
 # New version only; the upstream metadata fields and extraction code remain unchanged.
 $manifest = [IO.File]::ReadAllText($manifestPath)
 $manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.2'
