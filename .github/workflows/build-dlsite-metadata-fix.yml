@@ -84,8 +84,11 @@ jobs:
           $archive = [IO.Compression.ZipFile]::OpenRead($target)
           try {
             $names = @($archive.Entries | ForEach-Object { $_.FullName })
+            $normalisedNames = @($names | ForEach-Object { $_.Replace("\\", "/") })
+            Write-Host "PEXT archive entries:"
+            $names | ForEach-Object { Write-Host " - $_" }
             foreach ($required in @("extension.yaml", "DLsiteMetadata.dll", "Resources/DLsiteLogo.png")) {
-              if ($names -notcontains $required) { throw "Packaged PEXT is missing required root entry: $required" }
+              if ($normalisedNames -notcontains $required) { throw "Packaged PEXT is missing required root entry: $required" }
             }
             $manifestEntry = $archive.GetEntry("extension.yaml")
             $reader = New-Object IO.StreamReader($manifestEntry.Open())
