@@ -425,7 +425,7 @@ $provider = Replace-Once $provider 'var url = IsValidUrl\(link\) \? link : \$"ht
                         : $"https://www.dlsite.com/home/work/=/product_id/{gameName}.html";
 '@ "preserve product ID and route"
 
-$provider = Replace-Once $provider '\(home|soft|maniax|pro|aix\)' '(home|soft|maniax|pro|aix|books|appx|comipo)' "accept books and additional DLsite categories"
+$provider = Replace-Once $provider '(home|soft|maniax|pro|aix)' '(home|soft|maniax|pro|aix|books|appx|comipo)' "accept books and additional DLsite categories"
 
 $providerHelperAnchor = '    private static bool IsValidId(string id)'
 $providerHelper = @'
