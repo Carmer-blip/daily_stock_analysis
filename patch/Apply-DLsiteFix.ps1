@@ -250,12 +250,10 @@ $code = $jsonRx.Replace($code, $jsonReplacementForRegex, 1)
 [IO.File]::WriteAllText($path, $code, (New-Object Text.UTF8Encoding($false)))
 
 $manifest = [IO.File]::ReadAllText($manifestPath)
-$manifest = [regex]::Replace($manifest, '(?m)^Version:\s*.*
-, 'Version: 1.16.3')
+$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.3'
 [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
 
-# Add full exception logging. The original provider only showed a generic dialog,
-# which hid the actual inner exception from the user and from extensions.log.
+# Add full exception logging. The original provider only showed a generic dialog.
 $providerPath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\DLsiteMetadataProvider.cs"
 $provider = [IO.File]::ReadAllText($providerPath)
 $needle = '        catch (AggregateException ae)' + [Environment]::NewLine + '        {'
