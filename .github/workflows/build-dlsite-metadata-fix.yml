@@ -93,7 +93,7 @@ jobs:
             $manifestEntry = $archive.GetEntry("extension.yaml")
             $reader = New-Object IO.StreamReader($manifestEntry.Open())
             try { $manifestText = $reader.ReadToEnd() } finally { $reader.Dispose() }
-            if ($manifestText -notmatch "(?m)^Version:\s*1\.16\.2\s*$") {
+            if ($manifestText -notmatch "(?m)^Version:\s*1\.16\.3\s*$") {
               throw "Packaged manifest does not declare version 1.16.3."
             }
             Write-Host "Verified PEXT entries:"
