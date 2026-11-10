@@ -425,7 +425,11 @@ $provider = Replace-Once $provider 'var url = IsValidUrl\(link\) \? link : \$"ht
                         : $"https://www.dlsite.com/home/work/=/product_id/{gameName}.html";
 '@ "preserve product ID and route"
 
-$provider = Replace-Once $provider '(home|soft|maniax|pro|aix)' '(home|soft|maniax|pro|aix|books|appx|comipo)' "accept books and additional DLsite categories"
+$oldCategoryPattern = '(home|soft|maniax|pro|aix)'
+if (([regex]::Matches($provider, [regex]::Escape($oldCategoryPattern))).Count -ne 1) {
+    throw "Could not safely locate the original DLsite URL category pattern."
+}
+$provider = $provider.Replace($oldCategoryPattern, '(home|soft|maniax|pro|aix|books|appx|comipo)')
 
 $providerHelperAnchor = '    private static bool IsValidId(string id)'
 $providerHelper = @'
