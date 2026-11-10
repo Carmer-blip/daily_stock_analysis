@@ -250,6 +250,18 @@ $code = $jsonRx.Replace($code, $jsonReplacementForRegex, 1)
 [IO.File]::WriteAllText($path, $code, (New-Object Text.UTF8Encoding($false)))
 
 $manifest = [IO.File]::ReadAllText($manifestPath)
-$manifest = [regex]::Replace($manifest, '(?m)^Version:\s*.*$', 'Version: 1.16.2')
+$manifest = [regex]::Replace($manifest, '(?m)^Version:\s*.*
+, 'Version: 1.16.3')
 [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
-Write-Host "Patched DLsiteScrapper.cs and extension.yaml."
+
+# Add full exception logging. The original provider only showed a generic dialog,
+# which hid the actual inner exception from the user and from extensions.log.
+$providerPath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\DLsiteMetadataProvider.cs"
+$provider = [IO.File]::ReadAllText($providerPath)
+$needle = '        catch (AggregateException ae)' + [Environment]::NewLine + '        {'
+$replacement = '        catch (AggregateException ae)' + [Environment]::NewLine + '        {' + [Environment]::NewLine +
+'            Logger.Error(ae, $"DLsite metadata fetch failed. GameName=''{' + '$gameName' + '}''; DLsiteLink=''{' + '$dlsiteLink' + '}'';");'
+if (!$provider.Contains($needle)) { throw "Could not find AggregateException handler in DLsiteMetadataProvider.cs." }
+$provider = $provider.Replace($needle, $replacement)
+[IO.File]::WriteAllText($providerPath, $provider, (New-Object Text.UTF8Encoding($false)))
+Write-Host "Patched scraper, manifest, and diagnostic exception logging."
