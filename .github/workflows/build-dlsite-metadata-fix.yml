@@ -1,0 +1,61 @@
+name: Build DLsiteMetadata 1.16.2 Fix
+
+on:
+  push:
+    branches:
+      - tmp/dlsite-metadata-fix-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout build workflow
+        uses: actions/checkout@v4
+
+      - name: Checkout upstream DLsiteMetadata v1.16.1
+        uses: actions/checkout@v4
+        with:
+          repository: Mysterken/DLsiteMetadata
+          ref: v1.16.1
+          path: upstream
+
+      - name: Patch source
+        shell: pwsh
+        run: ./patch/Apply-DLsiteFix.ps1
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: nuget restore upstream/source/DLsiteMetadata.sln
+
+      - name: Build Release
+        shell: pwsh
+        run: msbuild upstream/source/DLsiteMetadata.sln /m /p:Configuration=Release /p:Platform="Any CPU"
+
+      - name: Package Playnite extension
+        shell: pwsh
+        run: |
+          $out = "upstream/source/bin/Release"
+          if (!(Test-Path "$out/DLsiteMetadata.dll")) { throw "Build output missing DLsiteMetadata.dll" }
+          if (!(Test-Path "$out/extension.yaml")) { throw "Build output missing extension.yaml" }
+          $pext = "DLsiteMetadata_1_16_2_Fix.pext"
+          if (Test-Path $pext) { Remove-Item $pext -Force }
+          Compress-Archive -Path "$out/*" -DestinationPath $pext -CompressionLevel Optimal
+          Get-Item $pext | Format-List Name,Length
+
+      - name: Upload installable PEXT
+        uses: actions/upload-artifact@v4
+        with:
+          name: DLsiteMetadata_1_16_2_Fix
+          path: DLsiteMetadata_1_16_2_Fix.pext
+          if-no-files-found: error
+          retention-days: 14
