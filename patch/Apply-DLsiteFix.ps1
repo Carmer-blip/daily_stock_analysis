@@ -187,7 +187,7 @@ $jsonReplacement = @'
             var request = (HttpWebRequest)WebRequest.Create(url);
             request.Method = "GET";
             request.UserAgent =
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
             request.Accept = isAjax
                 ? "application/json, text/javascript, */*; q=0.01"
                 : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
@@ -203,6 +203,7 @@ $jsonReplacement = @'
             var baseUri = new Uri(SiteBaseUrl);
             request.CookieContainer.Add(baseUri, new Cookie("locale", language.ToString(), "/", ".dlsite.com"));
             request.CookieContainer.Add(baseUri, new Cookie("loginchecked", "1", "/", ".dlsite.com"));
+            request.CookieContainer.Add(baseUri, new Cookie("adultchecked", "1", "/", ".dlsite.com"));
 
             if (!string.IsNullOrWhiteSpace(referer))
                 request.Referer = referer;
@@ -450,15 +451,9 @@ $code = $code.Replace(
 )
 
 # The upstream source used a separate cookie for the adult catalogue. Set it explicitly alongside locale.
-$cookieNeedle = '            request.CookieContainer.Add(baseUri, new Cookie("loginchecked", "1", "/", ".dlsite.com"));'
-if (-not $code.Contains($cookieNeedle)) { throw "Could not find DLsite cookie setup." }
+# The adult catalogue cookie is added directly in DownloadStringAsync above.
 $code = $code.Replace(
-    $cookieNeedle,
-    '            request.CookieContainer.Add(baseUri, new Cookie("loginchecked", "1", "/", ".dlsite.com"))' + [Environment]::NewLine +
-    '            request.CookieContainer.Add(baseUri, new Cookie("adultchecked", "1", "/", ".dlsite.com"));'
-)
-$code = $code.Replace(
-    'Chrome/136.0.0.0 Safari/537.36',
+    'Chrome/138.0.0.0 Safari/537.36',
     'Chrome/138.0.0.0 Safari/537.36'
 )
 
