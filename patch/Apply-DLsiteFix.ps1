@@ -425,7 +425,7 @@ $provider = Replace-Once $provider 'var url = IsValidUrl\(link\) \? link : \$"ht
                         : $"https://www.dlsite.com/home/work/=/product_id/{gameName}.html";
 '@ "preserve product ID and route"
 
-$provider = Replace-Once $provider '\(home\|soft\|maniax\|pro\|aix\)' '(home|soft|maniax|pro|aix|books|appx|comipo)' "accept books and additional DLsite categories"
+$provider = Replace-Once $provider '\(home|soft|maniax|pro|aix\)' '(home|soft|maniax|pro|aix|books|appx|comipo)' "accept books and additional DLsite categories"
 
 $providerHelperAnchor = '    private static bool IsValidId(string id)'
 $providerHelper = @'
@@ -443,22 +443,9 @@ if (-not $provider.Contains($providerHelperAnchor)) { throw "Could not locate pr
 $provider = $provider.Replace($providerHelperAnchor, $providerHelper + $providerHelperAnchor)
 [IO.File]::WriteAllText($providerPath, $provider, (New-Object Text.UTF8Encoding($false)))
 
-# Version bump for this follow-up build.
-$manifest = [IO.File]::ReadAllText($manifestPath)
-$manifest = $manifest -replace '(?m)^Version:.*
-$manifest = [IO.File]::ReadAllText($manifestPath)
-$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.3'
-[IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
-
-Write-Host "Applied proxy routing and outbound-IP diagnostics to the original DLsiteMetadata source. Original metadata extraction was not modified."
-, 'Version: 1.16.3'
-[IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
-
-Write-Host "Applied category-aware URLs, array/null-safe JSON parsing, and null-safe descriptions."
-
 # New version only; the upstream metadata fields and extraction code remain unchanged.
 $manifest = [IO.File]::ReadAllText($manifestPath)
-$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.2'
+$manifest = $manifest -replace '(?m)^Version:.*$', 'Version: 1.16.3'
 [IO.File]::WriteAllText($manifestPath, $manifest, (New-Object Text.UTF8Encoding($false)))
 
 Write-Host "Applied proxy routing and outbound-IP diagnostics to the original DLsiteMetadata source. Original metadata extraction was not modified."
