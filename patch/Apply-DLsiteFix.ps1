@@ -223,7 +223,7 @@ $jsonReplacement = @'
                 (ex.Response as HttpWebResponse)?.Dispose();
 
                 var shouldRetry = !status.HasValue
-                                  || status == HttpStatusCode.TooManyRequests
+                                  || (int)status.Value == 429
                                   || (int)status.Value >= 500;
 
                 if (attempt >= maxAttempts || !shouldRetry)
