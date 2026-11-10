@@ -21,6 +21,8 @@ $manifestPath = Join-Path $env:GITHUB_WORKSPACE "upstream\source\extension.yaml"
 # ---------------------------------------------------------------------------
 $code = [IO.File]::ReadAllText($sourcePath)
 
+$code = Replace-Once $code 'public class DLsiteScrapper\(ILogger logger\)' 'public class DLsiteScrapper(ILogger logger, DLsiteMetadataSettings settings)' "scraper constructor settings injection"
+
 if ($code -notmatch "using System\.Threading;") {
     $code = $code.Replace("using System.Text.RegularExpressions;", "using System.Text.RegularExpressions;" + [Environment]::NewLine + "using System.Threading;")
 }
