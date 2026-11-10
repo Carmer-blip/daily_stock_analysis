@@ -1,4 +1,4 @@
-name: Build DLsiteMetadata 1.16.2 VPN Proxy Fix
+name: Build DLsiteMetadata 1.16.3 VPN Proxy Fix
 
 on:
   push:
@@ -75,7 +75,7 @@ jobs:
             Select-Object -First 1
           if (!$generated) { throw "Playnite Toolbox did not generate a PEXT package." }
 
-          $target = Join-Path $env:GITHUB_WORKSPACE "DLsiteMetadata_1_16_2_VPN_Proxy_Fix.pext"
+          $target = Join-Path $env:GITHUB_WORKSPACE "DLsiteMetadata_1_16_2_VPN_Proxy_Parser_Fix.pext"
           if ($generated.FullName -ne $target) {
             Copy-Item $generated.FullName $target -Force
           }
@@ -94,7 +94,7 @@ jobs:
             $reader = New-Object IO.StreamReader($manifestEntry.Open())
             try { $manifestText = $reader.ReadToEnd() } finally { $reader.Dispose() }
             if ($manifestText -notmatch "(?m)^Version:\s*1\.16\.2\s*$") {
-              throw "Packaged manifest does not declare version 1.16.2."
+              throw "Packaged manifest does not declare version 1.16.3."
             }
             Write-Host "Verified PEXT entries:"
             $names | Sort-Object | ForEach-Object { Write-Host " - $_" }
@@ -109,7 +109,7 @@ jobs:
       - name: Upload installable PEXT
         uses: actions/upload-artifact@v4
         with:
-          name: DLsiteMetadata_1_16_2_VPN_Proxy_Fix
-          path: DLsiteMetadata_1_16_2_VPN_Proxy_Fix.pext
+          name: DLsiteMetadata_1_16_2_VPN_Proxy_Parser_Fix
+          path: DLsiteMetadata_1_16_2_VPN_Proxy_Parser_Fix.pext
           if-no-files-found: error
           retention-days: 14
