@@ -260,6 +260,8 @@ $jsonReplacement = @'
 
     private static List<string> ParseImages
 '@
+$code = Replace-Once $code $jsonPattern $jsonReplacement "JSON metadata parser and HTTP helper"
+
 $searchParserPattern = '(?s)        var searchResultsTable = document\.QuerySelector\("\.work_1col_table\.n_worklist"\);.*?return searchResults;\s*\}'
 $searchParserReplacement = @'
         var searchResultsRows = document.QuerySelectorAll(
