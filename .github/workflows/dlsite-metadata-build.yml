@@ -1,0 +1,69 @@
+name: Build DLsiteMetadata compatibility plugin
+
+on:
+  push:
+    branches:
+      - temp/dlsite-metadata-build-20261111
+    paths:
+      - 'tools/dlsite-build/**'
+      - '.github/workflows/dlsite-metadata-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout temporary build branch
+        uses: actions/checkout@v4
+
+      - name: Checkout original DLsiteMetadata source
+        uses: actions/checkout@v4
+        with:
+          repository: Mysterken/DLsiteMetadata
+          ref: v1.16.1
+          path: upstream
+
+      - name: Apply DLsite API compatibility patch
+        shell: pwsh
+        run: |
+          python tools/dlsite-build/patch_dlsite.py
+          if ($LASTEXITCODE -ne 0) { throw "Patch script failed" }
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          nuget restore upstream/source/DLsiteMetadata.sln -PackagesDirectory upstream/source/packages
+          if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed" }
+
+      - name: Build plugin
+        shell: pwsh
+        run: |
+          msbuild upstream/source/DLsiteMetadata.sln /m /p:Configuration=Release /p:Platform="Any CPU" /p:RestorePackages=false
+          if ($LASTEXITCODE -ne 0) { throw "MSBuild failed" }
+
+      - name: Package PEXT
+        shell: pwsh
+        run: |
+          $stage = "dist/DLsiteMetadata"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "upstream/source/bin/Release/*" $stage -Recurse -Force
+          $yaml = Get-Content "upstream/source/extension.yaml" -Raw
+          $yaml = $yaml -replace 'Version:\s*1\.16\.1', 'Version: 1.17.0'
+          Set-Content -Path "$stage/extension.yaml" -Value $yaml -Encoding utf8
+          if (!(Test-Path "$stage/DLsiteMetadata.dll")) { throw "Plugin DLL missing from build output" }
+          Compress-Archive -Path "$stage/*" -DestinationPath "DLsiteMetadata_1_17_0_Full_Metadata_Fix.pext" -Force
+          Get-FileHash "DLsiteMetadata_1_17_0_Full_Metadata_Fix.pext" -Algorithm SHA256 | Format-List
+
+      - name: Upload installable PEXT
+        uses: actions/upload-artifact@v4
+        with:
+          name: DLsiteMetadata_1_17_0_Full_Metadata_Fix
+          path: DLsiteMetadata_1_17_0_Full_Metadata_Fix.pext
+          if-no-files-found: error
+          retention-days: 2
