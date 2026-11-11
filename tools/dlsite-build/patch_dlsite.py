@@ -17,7 +17,7 @@ text = text.replace(old, new, 1)
 
 text = text.replace(
     'var (jsonRating, jsonTitle) = await FetchJsonInfoAsync(productId, language);',
-    'var (jsonRating, jsonTitle) = await FetchJsonInfoAsync(productId, site, language);',
+    'var (jsonRating, jsonTitle, jsonProduct) = await FetchJsonInfoAsync(productId, site, language);',
     1
 )
 
@@ -63,7 +63,7 @@ new_helpers = r'''    /// <summary>
     /// Reads DLsite's legacy info endpoint. Newer responses can be arrays or objects,
     /// so never assume the response is a JObject keyed by product ID.
     /// </summary>
-    private async Task<(double? Rating, string WorkName)> FetchJsonInfoAsync(
+    private async Task<(double? Rating, string WorkName, JObject Product)> FetchJsonInfoAsync(
         string productId, string site, SupportedLanguages language)
     {
         try
@@ -84,7 +84,7 @@ new_helpers = r'''    /// <summary>
             if (productNode == null)
             {
                 logger.Warn($"DLsite info API returned no product object for {productId} (site={site}).");
-                return (null, null);
+                return (null, null, null);
             }
 
             var rating = GetNumber(productNode["rate_average_2dp"])
@@ -97,7 +97,7 @@ new_helpers = r'''    /// <summary>
                 if (starRating.HasValue) rating = starRating.Value / 10.0;
             }
 
-            return (rating, FirstString(productNode, "work_name", "product_name", "work_name_masked"));
+            return (rating, FirstString(productNode, "work_name", "product_name", "work_name_masked"), productNode);
         }
         catch (Exception ex)
         {
@@ -244,11 +244,16 @@ new_helpers = r'''    /// <summary>
     private static void ApplyStructuredProductData(
         DLsiteScrapperResult result, JObject product, string categoryMappingTarget)
     {
-        result.Title ??= FirstString(product, "work_name", "product_name", "work_name_masked", "alt_name");
-        result.Circle ??= FirstString(product, "maker_name", "brand_name", "circle_name");
-        result.Series ??= FirstString(product, "series_name", "title_name");
-        result.UpdateDate ??= FirstString(product, "update_date", "modify_date");
-        result.Filesize ??= FirstString(product, "file_size_unit", "file_size", "filesize");
+        if (string.IsNullOrWhiteSpace(result.Title))
+            result.Title = FirstString(product, "work_name", "product_name", "work_name_masked", "alt_name");
+        if (string.IsNullOrWhiteSpace(result.Circle))
+            result.Circle = FirstString(product, "maker_name", "brand_name", "circle_name");
+        if (string.IsNullOrWhiteSpace(result.Series))
+            result.Series = FirstString(product, "series_name", "title_name");
+        if (string.IsNullOrWhiteSpace(result.UpdateDate))
+            result.UpdateDate = FirstString(product, "update_date", "modify_date");
+        if (string.IsNullOrWhiteSpace(result.Filesize))
+            result.Filesize = FirstString(product, "file_size_unit", "file_size", "filesize");
 
         if (!result.ReleaseDate.HasValue)
         {
