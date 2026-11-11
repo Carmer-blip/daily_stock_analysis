@@ -55,7 +55,7 @@ if old_desc not in text:
     raise SystemExit("Could not find description/return block; source version mismatch.")
 text = text.replace(old_desc, new_desc, 1)
 
-start = text.find('    /// Fetches work_name and rating from DLsite\\'s JSON API')
+start = text.find("    /// Fetches work_name and rating from DLsite's JSON API")
 end = text.find('    private static List<string> ParseImages(IDocument document)', start)
 if start < 0 or end < 0:
     raise SystemExit("Could not locate JSON helper section.")
