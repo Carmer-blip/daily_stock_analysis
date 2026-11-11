@@ -2,7 +2,7 @@ import pathlib
 import re
 import sys
 
-src = pathlib.Path("source/DLsiteScrapper.cs")
+src = pathlib.Path("upstream/source/DLsiteScrapper.cs")
 text = src.read_text(encoding="utf-8-sig")
 
 old = '''        var productIdMatch = Regex.Match(url, @"product_id/([A-Z]{2}\\d+)");
@@ -332,7 +332,7 @@ new_helpers = r'''    /// <summary>
                     .Where(x => !string.IsNullOrWhiteSpace(x)));
 
             if (!string.IsNullOrWhiteSpace(intro))
-                result.Description = intro.Replace("\\/\\/", "//").Replace("//img.dlsite.jp", "https://img.dlsite.jp");
+                result.Description = intro.Replace("//img.dlsite.jp", "https://img.dlsite.jp");
         }
     }
 
@@ -412,7 +412,7 @@ new_helpers = r'''    /// <summary>
         else if (value.StartsWith("/", StringComparison.Ordinal))
             value = "https://www.dlsite.com" + value;
 
-        return value.Contains("img.dlsite.jp", StringComparison.OrdinalIgnoreCase)
+        return value.IndexOf("img.dlsite.jp", StringComparison.OrdinalIgnoreCase) >= 0
             ? value
             : null;
     }
