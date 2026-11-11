@@ -55,6 +55,36 @@ if old_desc not in text:
     raise SystemExit("Could not find description/return block; source version mismatch.")
 text = text.replace(old_desc, new_desc, 1)
 
+# Avoid writing DateTime.MinValue when the old localized date format no longer matches.
+date_start = text.find("                    var releaseDateString = header.NextElementSibling?.Text().Trim();")
+date_assign = text.find("                    result.ReleaseDate = releaseDate;", date_start)
+date_end = text.find("                    continue;", date_assign)
+if date_start < 0 or date_assign < 0 or date_end < 0:
+    raise SystemExit("Could not locate release-date parsing block.")
+new_date = """                    var releaseDateString = header.NextElementSibling?.Text().Trim();
+                    var releaseFormats = new[]
+                    {
+                        "yyyy'年'MM'月'dd'日'", "yyyy'年'M'月'd'日'", "yyyy'年'MM'月'dd'日' H'時'",
+                        "MMM/dd/yyyy", "MMM/dd/yyyy H", "MM/dd/yyyy", "MM/dd/yyyy H",
+                        "dd/MM/yyyy", "dd/MM/yyyy H", "yyyy-MM-dd", "yyyy-MM-dd HH:mm:ss",
+                        "yyyy/MM/dd", "yyyy/MM/dd HH:mm:ss",
+                        "yyyy'년 'MM'월 'dd'일'", "yyyy'년 'M'월 'd'일'"
+                    };
+                    DateTime parsedReleaseDate;
+                    var hasReleaseDate = DateTime.TryParseExact(
+                        releaseDateString, releaseFormats, CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out parsedReleaseDate);
+                    if (!hasReleaseDate)
+                        hasReleaseDate = DateTime.TryParse(
+                            releaseDateString, CultureInfo.InvariantCulture,
+                            DateTimeStyles.None, out parsedReleaseDate);
+                    if (hasReleaseDate)
+                        result.ReleaseDate = parsedReleaseDate;
+
+                    continue;"""
+text = text[:date_start] + new_date + text[date_end + len("                    continue;"):]
+
+
 start = text.find("    /// Fetches work_name and rating from DLsite's JSON API")
 end = text.find('    private static List<string> ParseImages(IDocument document)', start)
 if start < 0 or end < 0:
@@ -102,7 +132,7 @@ new_helpers = r'''    /// <summary>
         catch (Exception ex)
         {
             logger.Warn(ex, $"Failed to fetch DLsite info JSON for {productId}");
-            return (null, null);
+            return (null, null, null);
         }
     }
 
